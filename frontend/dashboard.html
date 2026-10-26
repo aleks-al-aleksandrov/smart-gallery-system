@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="description" content="Smart Gallery System - Enterprise unified application platform">
+    <meta name="theme-color" content="#667eea">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Smart Gallery System">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Smart Gallery System - Dashboard</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="styles/dashboard.css">
+    <link rel="stylesheet" href="styles/premium-theme.css">
+    <link rel="stylesheet" href="styles/premium-ui.css">
+    <link rel="stylesheet" href="styles/branding-overrides.css">
+    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
+    <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+    <link rel="stylesheet" href="styles/smart-image.css">
+    <link rel="stylesheet" href="styles/dark-theme.css">
+    <link rel="stylesheet" href="styles/bulk-operations.css">
+    <link rel="stylesheet" href="styles/toast-notifications.css">
+    <link rel="stylesheet" href="styles/loading-states.css">
+    <link rel="stylesheet" href="styles/file-preview.css">
+    <link rel="stylesheet" href="styles/context-menu.css">
+    <link rel="stylesheet" href="styles/drag-drop-upload.css">
+    <link rel="stylesheet" href="styles/favorites.css">
+    <link rel="stylesheet" href="styles/ai-features.css">
+    <link rel="stylesheet" href="styles/theme-toggle.css">
+    <link rel="stylesheet" href="styles/ui-fixes.css">
+    <link rel="stylesheet" href="styles/ui-enhancements.css">
+    <link rel="stylesheet" href="styles/responsive.css">
+    <link rel="stylesheet" href="styles/enhancements.css">
+    <link rel="stylesheet" href="styles/skeleton-loading.css">
+    <link rel="stylesheet" href="styles/page-transitions.css">
+    <link rel="stylesheet" href="styles/empty-states.css">
+    <link rel="stylesheet" href="styles/enhanced-tooltips.css">
+    <link rel="stylesheet" href="styles/enhanced-animations.css">
+    <link rel="stylesheet" href="styles/sidebar.css">
+    <link rel="stylesheet" href="styles/widgets.css">
+    <link rel="stylesheet" href="styles/notifications.css">
+    <link rel="stylesheet" href="styles/glass-theme.css">
+    <link rel="stylesheet" href="styles/layout-fixes.css">
+    <link rel="stylesheet" href="styles/global-search.css">
+</head>
+<body>
+    <!-- Sidebar Navigation -->
+    <nav class="modern-sidebar">
+        <div class="sidebar-header">
+            <a href="#" class="sidebar-logo">
+                <img src="assets/logo.svg" alt="Smart Gallery">
+                <span>Smart Gallery System</span>
+            </a>
+        </div>
+        
+        <div class="sidebar-nav">
+            <div class="nav-category">Main Menu</div>
+            <a href="#" class="nav-item active" data-app="dashboard">
+                <i class="fas fa-th-large"></i>
+                <span>Dashboard</span>
+            </a>
+            <a href="apps/daily-plan.html" class="nav-item">
+                <i class="fas fa-calendar-alt"></i>
+                <span>Daily Plan</span>
+            </a>
+            <a href="apps/gallery.html" class="nav-item">
+                <i class="fas fa-images"></i>
+                <span>Gallery</span>
+            </a>
+            <a href="apps/dashboard.html" class="nav-item">
+                <i class="fas fa-chart-line"></i>
+                <span>Performance</span>
+            </a>
+            
+            <div class="nav-category">Support</div>
+            <a href="user-guide.html" class="nav-item">
+                <i class="fas fa-book"></i>
+                <span>User Guide</span>
+            </a>
+
+            <div class="nav-category" id="adminSection" style="display: none;">Management</div>
+            <a href="admin.html" class="nav-item" id="adminLink" style="display: none;">
+                <i class="fas fa-cog"></i>
+                <span>Admin Panel</span>
+            </a>
+            <a href="monitoring.html" class="nav-item" id="monitoringLink" style="display: none;">
+                <i class="fas fa-server"></i>
+                <span>System Health</span>
+            </a>
+        </div>
+
+        <div class="sidebar-footer">
+            <div class="user-mini-profile">
+                <div class="user-avatar">AD</div>
+                <div class="user-info-text">
+                    <span class="user-name">Administrator</span>
+                    <span class="user-role">Super Admin</span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="dashboard-container">
+        <!-- Toggle Button -->
+        <button id="sidebarToggle" class="sidebar-toggle" aria-label="Toggle Menu">
+            <i class="fas fa-bars"></i>
+        </button>
+
+        <header class="dashboard-header">
+            <div class="header-left">
+                <!-- Logo removed here as it's in sidebar now -->
+                <div class="header-title-group" style="margin-left: 3rem;">
+                    <h1 class="premium-title" style="font-size: 2rem; margin: 0;">Dashboard</h1>
+                    <span class="premium-subtitle-small" id="currentDate"></span>
+                </div>
+            </div>
+            <div class="header-right">
+                <!-- Notification Bell -->
+                <div class="notification-wrapper">
+                    <button id="notificationBell" class="notification-bell">
+                        <i class="fas fa-bell"></i>
+                    </button>
+                    <div class="notification-panel" id="notificationPanel">
+                        <div class="panel-header">
+                            <h3>Notifications</h3>
+                            <span class="mark-read">Mark all as read</span>
+                        </div>
+                        <div class="notification-list">
+                            <!-- Dynamic Content -->
+                        </div>
+                    </div>
+                </div>
+
+                <button class="logout-button" id="logoutBtn" aria-label="Logout">
+                    <i class="fas fa-sign-out-alt" aria-hidden="true"></i>
+                    <span>Logout</span>
+                </button>
+            </div>
+        </header>
+        
+        <main class="dashboard-main">
+            <!-- New Widget Grid -->
+            <div class="dashboard-grid">
+                <!-- Welcome Widget -->
+                <div class="widget widget-welcome">
+                    <div class="welcome-content">
+                        <!-- Welcome text removed as per request -->
+                    </div>
+                    <div class="welcome-date" id="currentTime">12:00 PM</div>
+                    <!-- Decorative Circle -->
+                    <div style="position: absolute; right: -50px; bottom: -50px; width: 300px; height: 300px; background: rgba(255,255,255,0.1); border-radius: 50%;"></div>
+                </div>
+
+                <!-- Stats Widgets -->
+                <div class="widget widget-stat">
+                    <div class="stat-icon"><i class="fas fa-users"></i></div>
+                    <div class="stat-info">
+                        <h3>Users</h3>
+                        <div class="value" id="statUsers">–</div>
+                    </div>
+                </div>
+                <div class="widget widget-stat">
+                    <div class="stat-icon"><i class="fas fa-images"></i></div>
+                    <div class="stat-info">
+                        <h3>Content Files</h3>
+                        <div class="value" id="statImages">–</div>
+                    </div>
+                </div>
+                <div class="widget widget-stat">
+                    <div class="stat-icon"><i class="fas fa-tv"></i></div>
+                    <div class="stat-info">
+                        <h3>Live Screens</h3>
+                        <div class="value" id="statScreens">–</div>
+                    </div>
+                </div>
+                <div class="widget widget-stat">
+                    <div class="stat-icon"><i class="fas fa-bolt"></i></div>
+                    <div class="stat-info">
+                        <h3>Uptime (min)</h3>
+                        <div class="value" id="statUptime">–</div>
+                    </div>
+                </div>
+
+                <!-- Quick Actions Widget -->
+                <div class="widget widget-actions">
+                    <h3 style="margin-bottom: 1rem;">Quick Access</h3>
+                    <div class="apps-grid" id="appsGrid">
+                        <!-- Original App Cards will be injected here via JS -->
+                    </div>
+                </div>
+
+                <!-- System Status Widget -->
+                <div class="widget widget-status">
+                    <h3 style="margin-bottom: 1rem;">System Status</h3>
+                    <div class="status-item">
+                        <span>Database</span>
+                        <div class="status-indicator">
+                            <span class="dot"></span>
+                            <span style="font-size: 0.8rem; color: #10b981;">Operational</span>
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <span>File Server</span>
+                        <div class="status-indicator">
+                            <span class="dot"></span>
+                            <span style="font-size: 0.8rem; color: #10b981;">Online</span>
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <span>Backup Service</span>
+                        <div class="status-indicator">
+                            <span class="dot warning"></span>
+                            <span style="font-size: 0.8rem; color: #f59e0b;">Syncing</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <script src="scripts/aggressive-cache-buster.js"></script>
+    <script src="scripts/debug-overlay.js"></script>
+    <script src="scripts/modern-ui.js"></script>
+    <script src="scripts/dashboard.js"></script>
+    <script src="scripts/analytics.js"></script>
+    <script src="scripts/keyboard-shortcuts.js"></script>
+    <script src="scripts/theme-manager.js"></script>
+    <script src="scripts/notification-system.js"></script>
+    <script src="scripts/bulk-operations.js"></script>
+    <script src="scripts/toast-notifications.js"></script>
+    <script src="scripts/enhanced-search.js"></script>
+    <script src="scripts/loading-states.js"></script>
+    <script src="scripts/file-management.js"></script>
+    <script src="scripts/file-preview.js"></script>
+    <script src="scripts/context-menu.js"></script>
+    <script src="scripts/export-system.js"></script>
+    <script src="scripts/drag-drop-upload.js"></script>
+    <script src="scripts/favorites.js"></script>
+    <script src="scripts/virtual-scroll.js"></script>
+    <script src="scripts/ai-features.js"></script>
+    <script src="scripts/ai-ui.js"></script>
+    <script src="scripts/pwa.js"></script>
+    <script src="scripts/error-boundary.js"></script>
+    <script src="scripts/loading-manager.js"></script>
+    <script src="scripts/touch-gestures.js"></script>
+    <script src="scripts/enhanced-ui.js"></script>
+    <script src="scripts/global-search-ui.js"></script>
+    
+    <!-- Global Search Component -->
+    <div include-html="components/global-search.html"></div>
+    
+    <!-- Theme Toggle Button -->
+    <button id="themeToggle" class="theme-toggle-btn" aria-label="Toggle Dark Mode">
+        <i class="fas fa-moon"></i>
+        <i class="fas fa-sun"></i>
+    </button>
+    
+    <script>
+        // Include HTML helper
+        document.querySelectorAll('[include-html]').forEach(async (el) => {
+            const file = el.getAttribute('include-html');
+            try {
+                const response = await fetch(file);
+                const html = await response.text();
+                el.outerHTML = html;
+                
+                // Re-initialize specific components if needed
+                if (file.includes('global-search')) {
+                    if (typeof initGlobalSearch === 'function') {
+                        initGlobalSearch();
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading component:', error);
+            }
+        });
+    </script>
+    <script>
+        (async function loadOverview() {
+            try {
+                const res = await fetch('/api/overview', { credentials: 'include' });
+                if (!res.ok) return;
+                const d = await res.json();
+                document.getElementById('statUsers').textContent = d.users;
+                document.getElementById('statImages').textContent = d.images;
+                document.getElementById('statScreens').textContent = d.screens;
+                document.getElementById('statUptime').textContent = d.uptimeMinutes;
+            } catch (e) { /* overview is optional */ }
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,751 @@
+const express = require('express');
+const http = require('http');
+const path = require('path');
+const session = require('express-session');
+const cors = require('cors');
+const compression = require('compression');
+const fs = require('fs');
+const WebSocket = require('ws');
+const config = require('./config');
+const auth = require('./auth');
+const jwtUtils = require('./utils/jwt');
+const dailyPlanRoutes = require('./routes/daily-plan');
+const galleryRoutes = require('./routes/gallery');
+const dashboardRoutes = require('./routes/dashboard');
+
+const app = express();
+const server = http.createServer(app);
+const PORT = config.server.port || 3000;
+
+app.use(compression());
+
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    next();
+});
+
+const rateLimitMap = new Map();
+
+const rateLimit = (maxRequests = 100, windowMs = 60000, bucket = 'api') => {
+    return (req, res, next) => {
+        const key = `${bucket}:${req.ip || req.connection.remoteAddress}`;
+        const now = Date.now();
+        
+        if (!rateLimitMap.has(key)) {
+            rateLimitMap.set(key, { count: 1, resetTime: now + windowMs });
+            return next();
+        }
+        
+        const record = rateLimitMap.get(key);
+        
+        if (now > record.resetTime) {
+            record.count = 1;
+            record.resetTime = now + windowMs;
+            return next();
+        }
+        
+        if (record.count >= maxRequests) {
+            return res.status(429).json({ error: 'Too many requests, please try again later' });
+        }
+        
+        record.count++;
+        next();
+    };
+};
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, record] of rateLimitMap.entries()) {
+        if (now > record.resetTime) {
+            rateLimitMap.delete(key);
+        }
+    }
+}, 60000);
+
+// Display screens run for hours and send frequent analytics pings, so those get their own
+// budget instead of starving the general API limit (which would freeze a wall screen).
+const generalLimit = rateLimit(300, 60000, 'api');
+app.use('/api/', (req, res, next) => (req.path.startsWith('/analytics/') ? next() : generalLimit(req, res, next)));
+app.use('/api/analytics', rateLimit(600, 60000, 'analytics'));
+app.use('/api/login', rateLimit(5, 60000, 'login'));
+app.use('/api/upload', rateLimit(20, 60000, 'upload'));
+
+// API responses describe live content and must never be cached by the browser.
+app.use('/api/', (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
+});
+
+app.use(cors({
+    origin: true,
+    credentials: true
+}));
+
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+app.use(session({
+    secret: config.server.sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        secure: false,
+        httpOnly: true,
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+        sameSite: 'lax'
+    }
+}));
+
+const requireAuth = (req, res, next) => {
+    let user = null;
+    
+    if (req.session && req.session.userId) {
+        user = auth.getUserById(req.session.userId);
+    } else if (req.headers.authorization) {
+        const token = req.headers.authorization.replace('Bearer ', '');
+        try {
+            const decoded = jwtUtils.verifyToken(token);
+            user = auth.getUserById(decoded.userId);
+        } catch (error) {
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+    }
+    
+    if (user) {
+        req.user = user;
+        return next();
+    }
+    
+    res.status(401).json({ error: 'Authentication required' });
+};
+
+app.use(express.static(path.join(__dirname, '../frontend'), {
+    maxAge: 0,
+    etag: false,
+    lastModified: false,
+    setHeaders: (res, filePath) => {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.setHeader('Surrogate-Control', 'no-store');
+        
+        if (filePath.endsWith('.css')) {
+            res.setHeader('Content-Type', 'text/css; charset=utf-8');
+        } else if (filePath.endsWith('.js')) {
+            res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        } else if (filePath.endsWith('.html')) {
+            res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        } else if (filePath.endsWith('.svg')) {
+            res.setHeader('Content-Type', 'image/svg+xml');
+        }
+    }
+}));
+
+// Front-end libraries are served from node_modules so the system works fully offline (no CDN).
+app.use('/vendor/fontawesome', express.static(path.join(__dirname, '../node_modules/@fortawesome/fontawesome-free')));
+app.use('/vendor/chartjs', express.static(path.join(__dirname, '../node_modules/chart.js/dist')));
+app.use('/vendor/sortablejs', express.static(path.join(__dirname, '../node_modules/sortablejs')));
+
+app.use('/data/image-cache', express.static(path.join(__dirname, '../data/image-cache'), {
+    maxAge: '7d',
+    etag: true
+}));
+app.use('/data/thumbnails', express.static(path.join(__dirname, '../data/thumbnails'), {
+    maxAge: '7d',
+    etag: true
+}));
+
+app.use('/previews', express.static(path.join(__dirname, '../docs/screenshots'), {
+    maxAge: 0,
+    etag: false,
+    lastModified: false,
+    setHeaders: (res, filePath) => {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        if (filePath.endsWith('.png')) {
+            res.setHeader('Content-Type', 'image/png');
+        }
+    }
+}));
+
+app.use((req, res, next) => {
+    // Aggressive Cache Control
+    res.set({
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'Surrogate-Control': 'no-store'
+    });
+    next();
+});
+
+app.get('/', (req, res) => {
+    if (req.session && req.session.userId) {
+        return res.redirect('/dashboard');
+    }
+    res.sendFile(path.join(__dirname, '../frontend/login.html'));
+});
+
+app.post('/api/login', async (req, res) => {
+    try {
+        const { username, password, rememberMe } = req.body;
+        
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password are required' });
+        }
+        
+        if (typeof username !== 'string' || typeof password !== 'string') {
+            return res.status(400).json({ error: 'Invalid input format' });
+        }
+        
+        if (username.length > 50 || password.length > 200) {
+            return res.status(400).json({ error: 'Input too long' });
+        }
+        
+        const result = await auth.authenticateUser(username, password);
+        
+        if (!result.success) {
+            return res.status(401).json({ error: result.message });
+        }
+        
+        req.session.userId = result.user.id;
+        req.session.username = result.user.username;
+        req.session.role = result.user.role;
+        
+        if (rememberMe) {
+            req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000;
+        }
+        
+        const token = jwtUtils.generateToken(result.user);
+        const refreshToken = jwtUtils.generateRefreshToken(result.user);
+        
+        res.json({
+            success: true,
+            user: result.user,
+            token: token,
+            refreshToken: refreshToken,
+            expiresIn: jwtUtils.JWT_EXPIRES_IN
+        });
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+app.post('/api/logout', (req, res) => {
+    req.session.destroy((err) => {
+        if (err) {
+            return res.status(500).json({ error: 'Failed to logout' });
+        }
+        res.clearCookie('connect.sid');
+        res.json({ success: true, message: 'Logged out successfully' });
+    });
+});
+
+app.post('/api/refresh-token', (req, res) => {
+    try {
+        const { refreshToken } = req.body;
+        
+        if (!refreshToken) {
+            return res.status(400).json({ error: 'Refresh token is required' });
+        }
+        
+        const decoded = jwtUtils.verifyToken(refreshToken);
+        
+        if (decoded.type !== 'refresh') {
+            return res.status(401).json({ error: 'Invalid refresh token' });
+        }
+        
+        const user = auth.getUserById(decoded.userId);
+        if (!user) {
+            return res.status(401).json({ error: 'User not found' });
+        }
+        
+        const newToken = jwtUtils.generateToken(user);
+        const newRefreshToken = jwtUtils.generateRefreshToken(user);
+        
+        res.json({
+            success: true,
+            token: newToken,
+            refreshToken: newRefreshToken,
+            expiresIn: jwtUtils.JWT_EXPIRES_IN
+        });
+    } catch (error) {
+        res.status(401).json({ error: 'Invalid or expired refresh token' });
+    }
+});
+
+app.get('/api/verify-token', requireAuth, (req, res) => {
+    res.json({
+        valid: true,
+        user: req.user
+    });
+});
+
+app.get('/api/current-user', requireAuth, (req, res) => {
+    res.json({ user: req.user });
+});
+
+app.get('/api/user-preferences', requireAuth, (req, res) => {
+    const preferences = auth.getUserPreferences(req.session.userId);
+    res.json({ preferences });
+});
+
+app.post('/api/user-preferences', requireAuth, (req, res) => {
+    const { preferences } = req.body;
+    const success = auth.saveUserPreferences(req.session.userId, preferences);
+    if (success) {
+        res.json({ success: true });
+    } else {
+        res.status(500).json({ error: 'Failed to save preferences' });
+    }
+});
+
+app.post('/api/update-last-app', requireAuth, (req, res) => {
+    const { appName } = req.body;
+    const success = auth.updateUserLastApp(req.session.userId, appName);
+    if (success) {
+        res.json({ success: true });
+    } else {
+        res.status(500).json({ error: 'Failed to update last app' });
+    }
+});
+
+app.get('/dashboard', requireAuth, (req, res) => {
+    res.sendFile(path.join(__dirname, '../frontend/dashboard.html'));
+});
+
+app.get('/app/:appName', requireAuth, (req, res) => {
+    const { appName } = req.params;
+    const user = req.user;
+    
+    if (!user || !user.allowedApps.includes(appName)) {
+        return res.status(403).send('Access denied');
+    }
+    
+    const appFiles = {
+        'daily-plan': 'daily-plan.html',
+        'gallery': 'gallery.html',
+        'dashboard': 'dashboard.html',
+        'custom-layout': 'custom-layout.html'
+    };
+    
+    const fileName = appFiles[appName];
+    if (!fileName) {
+        return res.status(404).send('App not found');
+    }
+    
+    res.sendFile(path.join(__dirname, `../frontend/apps/${fileName}`));
+});
+
+app.get('/admin', requireAuth, (req, res) => {
+    const user = req.user;
+    if (user.role !== 'admin') {
+        return res.status(403).send('Access denied');
+    }
+    res.sendFile(path.join(__dirname, '../frontend/admin.html'));
+});
+
+app.get('/admin/layout-builder', requireAuth, (req, res) => {
+    const user = req.user;
+    if (user.role !== 'admin') {
+        return res.status(403).send('Access denied');
+    }
+    res.sendFile(path.join(__dirname, '../frontend/admin-layout-builder.html'));
+});
+
+app.get('/monitoring', requireAuth, (req, res) => {
+    const user = req.user;
+    if (user.role !== 'admin') {
+        return res.status(403).send('Access denied');
+    }
+    res.sendFile(path.join(__dirname, '../frontend/monitoring.html'));
+});
+
+app.get('/api/config', requireAuth, (req, res) => {
+    res.json({
+        apps: config.apps,
+        user: {
+            role: req.user.role,
+            allowedApps: req.user.allowedApps,
+            networkPaths: req.user.networkPaths
+        }
+    });
+});
+
+app.use('/api/daily-plan', requireAuth, dailyPlanRoutes.router);
+app.use('/api/gallery', requireAuth, galleryRoutes.router);
+app.use('/api/dashboard', requireAuth, dashboardRoutes.router);
+
+const adminRoutes = require('./routes/admin');
+app.use('/api/admin', adminRoutes);
+
+const layoutRoutes = require('./routes/layouts');
+app.use('/api/layouts', layoutRoutes);
+
+const folderScannerRoutes = require('./routes/folder-scanner');
+app.use('/api/folder-scanner', folderScannerRoutes);
+
+const imageIntelligenceRoutes = require('./routes/image-intelligence');
+app.use('/api/image', imageIntelligenceRoutes);
+
+const searchRoutes = require('./routes/search');
+app.use('/api/search', searchRoutes);
+
+const analyticsRoutes = require('./routes/analytics');
+app.use('/api/analytics', analyticsRoutes);
+
+const fileManagementRoutes = require('./routes/file-management');
+app.use('/api/files', fileManagementRoutes);
+
+const aiFeaturesRoutes = require('./routes/ai-features');
+app.use('/api/ai', aiFeaturesRoutes);
+
+const uploadRoutes = require('./routes/upload');
+app.use('/api/upload', uploadRoutes);
+
+const monitoringRoutes = require('./routes/monitoring');
+app.use('/api/monitoring', monitoringRoutes);
+
+const backupRoutes = require('./routes/backup');
+app.use('/api/backup', backupRoutes);
+
+const systemRoutes = require('./routes/system');
+app.use('/api/system', systemRoutes);
+
+const monitoring = require('./utils/monitoring');
+const logger = require('./utils/logger');
+const driveScanner = require('./utils/drive-scanner');
+const capabilitiesCheck = require('./utils/capabilities-check');
+
+// Start Drive Scanner
+try {
+    driveScanner.start();
+    driveScanner.on('driveAttached', (drive) => {
+        logger.info(`Drive attached: ${drive}`);
+        // Here you could trigger a scan of the new drive
+        // folderScannerRoutes.scanDrive(drive); // Hypothetical
+    });
+    driveScanner.on('driveRemoved', (drive) => {
+        logger.info(`Drive removed: ${drive}`);
+    });
+} catch (error) {
+    logger.error('Failed to start Drive Scanner', error);
+}
+
+app.use((req, res, next) => {
+    const startTime = Date.now();
+    
+    res.on('finish', () => {
+        const responseTime = Date.now() - startTime;
+        monitoring.trackRequest(req.method, req.path, res.statusCode, responseTime);
+        
+        if (res.statusCode >= 400) {
+            logger.warn(`HTTP ${res.statusCode}`, {
+                method: req.method,
+                path: req.path,
+                statusCode: res.statusCode,
+                responseTime
+            });
+        }
+    });
+    
+    next();
+});
+
+app.use((err, req, res, next) => {
+    logger.error('Unhandled error', err, {
+        method: req.method,
+        path: req.path,
+        body: req.body
+    });
+    
+    res.status(err.status || 500).json({
+        error: err.message || 'Internal server error',
+        ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    });
+});
+
+const wss = new WebSocket.Server({ 
+    server,
+    perMessageDeflate: false,
+    maxPayload: 1024 * 1024
+});
+
+const watchers = new Map();
+
+function setupWatchers() {
+    const users = auth.getAllUsers();
+    
+    users.forEach(user => {
+        if (!user.networkPaths) return;
+        
+        const userId = user.id.toString();
+        
+        try {
+            if (user.allowedApps.includes('daily-plan')) {
+                let dailyPlanPath;
+                if (user.networkPaths.dailyPlan) {
+                    dailyPlanPath = path.normalize(user.networkPaths.dailyPlan);
+                } else if (user.networkPaths.main) {
+                    dailyPlanPath = path.normalize(user.networkPaths.main);
+                } else {
+                    dailyPlanPath = path.join(__dirname, '../../images');
+                }
+                
+                if (dailyPlanPath && fs.existsSync(dailyPlanPath)) {
+                    if (!watchers.has(`${userId}-daily-plan`)) {
+                        try {
+                            const watcher = dailyPlanRoutes.setupDailyPlanWatcher(dailyPlanPath, wss);
+                            watchers.set(`${userId}-daily-plan`, watcher);
+                            logger.info(`Daily plan watcher set up for user ${user.username}`, { path: dailyPlanPath });
+                        } catch (err) {
+                            logger.error('Failed to setup daily plan watcher', err, { userId, path: dailyPlanPath });
+                        }
+                    }
+                } else {
+                    logger.warn(`Daily plan path does not exist, skipping watcher`, { userId, path: dailyPlanPath });
+                }
+            }
+            
+            if (user.allowedApps.includes('gallery')) {
+                let galleryPath;
+                if (user.networkPaths.gallery) {
+                    galleryPath = path.normalize(user.networkPaths.gallery);
+                } else if (user.networkPaths.main) {
+                    galleryPath = path.normalize(user.networkPaths.main);
+                }
+                
+                if (galleryPath && fs.existsSync(galleryPath) && !watchers.has(`${userId}-gallery`)) {
+                    try {
+                        const watcher = galleryRoutes.setupGalleryWatcher(galleryPath, wss);
+                        watchers.set(`${userId}-gallery`, watcher);
+                        logger.info(`Gallery watcher set up for user ${user.username}`, { path: galleryPath });
+                    } catch (err) {
+                        logger.error('Failed to setup gallery watcher', err, { userId, path: galleryPath });
+                    }
+                } else if (galleryPath && !fs.existsSync(galleryPath)) {
+                    logger.warn(`Gallery path does not exist, skipping watcher`, { userId, path: galleryPath });
+                }
+            }
+            
+            if (user.allowedApps.includes('dashboard')) {
+                const mainPath = user.networkPaths.main ? path.normalize(user.networkPaths.main) : null;
+                const extraPath = user.networkPaths.extra ? path.normalize(user.networkPaths.extra) : null;
+                const kpiPath = user.networkPaths.kpi ? path.normalize(user.networkPaths.kpi) : null;
+                
+                if (mainPath && fs.existsSync(mainPath) && !watchers.has(`${userId}-dashboard`)) {
+                    try {
+                        const watcher = dashboardRoutes.setupDashboardWatcher(mainPath, extraPath, kpiPath, wss);
+                        watchers.set(`${userId}-dashboard`, watcher);
+                        logger.info(`Dashboard watcher set up for user ${user.username}`, { path: mainPath });
+                    } catch (err) {
+                        logger.error('Failed to setup dashboard watcher', err, { userId, path: mainPath });
+                    }
+                } else if (mainPath && !fs.existsSync(mainPath)) {
+                    logger.warn(`Dashboard path does not exist, skipping watcher`, { userId, path: mainPath });
+                }
+            }
+        } catch (err) {
+            logger.error('Error setting up watchers for user', err, { userId, username: user.username });
+        }
+    });
+}
+
+wss.on('connection', (ws, req) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const pathname = url.pathname;
+    
+    let appType = null;
+    if (pathname.includes('/daily-plan') || pathname === '/ws/daily-plan') {
+        appType = 'daily-plan';
+    } else if (pathname.includes('/gallery') || pathname === '/ws/gallery') {
+        appType = 'gallery';
+    } else if (pathname.includes('/dashboard') || pathname === '/ws/dashboard') {
+        appType = 'dashboard';
+    } else if (pathname.includes('/monitoring') || pathname === '/ws/monitoring') {
+        appType = 'monitoring';
+    }
+    
+    ws.appType = appType;
+    ws.id = Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    
+    const connectionId = monitoring.trackWebSocketConnection(ws, appType);
+    
+    console.log(`WebSocket client connected for ${appType || 'unknown'} app (ID: ${connectionId})`);
+    
+    ws.send(JSON.stringify({ 
+        type: 'status', 
+        status: 'connected',
+        appType: appType,
+        connectionId: connectionId
+    }));
+    
+    const pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+            try {
+                ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+            } catch (error) {
+                monitoring.logError(error, { context: 'WebSocket ping', appType });
+                clearInterval(pingInterval);
+            }
+        } else {
+            clearInterval(pingInterval);
+        }
+    }, 30000);
+    
+    ws.on('message', (message) => {
+        try {
+            monitoring.trackWebSocketMessage(ws, 'received');
+            const data = JSON.parse(message);
+            if (data.type === 'ping') {
+                monitoring.trackWebSocketMessage(ws, 'sent');
+                ws.send(JSON.stringify({ type: 'pong', timestamp: new Date().toISOString() }));
+            } else if (data.type === 'pong') {
+                if (ws.monitoringId) {
+                    const conn = monitoring.metrics.websockets.connections.find(c => c.id === ws.monitoringId);
+                    if (conn) {
+                        conn.lastActivity = new Date().toISOString();
+                    }
+                }
+            }
+        } catch (error) {
+            monitoring.logError(error, { context: 'WebSocket message processing', appType });
+            console.error('Error processing WebSocket message:', error);
+        }
+    });
+    
+    ws.on('close', () => {
+        if (pingInterval) clearInterval(pingInterval);
+        monitoring.trackWebSocketDisconnection(ws);
+        console.log(`WebSocket client disconnected for ${appType || 'unknown'} app`);
+    });
+    
+    ws.on('error', (error) => {
+        monitoring.logError(error, { context: 'WebSocket error', appType });
+        console.error(`WebSocket error for ${appType || 'unknown'} app:`, error);
+    });
+});
+
+const broadcastToMonitoring = (wss, data) => {
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN && client.appType === 'monitoring') {
+            try {
+                monitoring.trackWebSocketMessage(client, 'sent');
+                client.send(JSON.stringify(data));
+            } catch (error) {
+                monitoring.logError(error, { context: 'Monitoring broadcast' });
+            }
+        }
+    });
+};
+
+setInterval(() => {
+    const metrics = monitoring.getMetrics();
+    const health = monitoring.getHealthStatus();
+    broadcastToMonitoring(wss, {
+        type: 'metrics_update',
+        metrics: metrics,
+        health: health,
+        timestamp: new Date().toISOString()
+    });
+}, 5000);
+
+// Live numbers for the dashboard overview cards (real data, no placeholders).
+app.get('/api/overview', requireAuth, (req, res) => {
+    const formats = new Set((config.supportedFormats || ['.jpg', '.jpeg', '.png', '.webp', '.gif']).map(f => f.toLowerCase()));
+    const countImages = (dir, depth = 0) => {
+        if (depth > 4 || !fs.existsSync(dir)) return 0;
+        let n = 0;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) n += countImages(full, depth + 1);
+            else if (formats.has(path.extname(entry.name).toLowerCase())) n += 1;
+        }
+        return n;
+    };
+    const roots = [...new Set(Object.values(req.user.networkPaths || {})
+        .filter(Boolean)
+        .map(p => path.resolve(__dirname, '..', p)))]
+        .filter((p, _, all) => !all.some(other => other !== p && p.startsWith(other + path.sep)));
+    res.json({
+        users: auth.getAllUsers().length,
+        images: roots.reduce((sum, root) => sum + countImages(root), 0),
+        screens: wss.clients.size,
+        uptimeMinutes: Math.round(process.uptime() / 60)
+    });
+});
+
+app.use((req, res) => {
+    if (req.accepts('html')) {
+        res.status(404).sendFile(path.join(__dirname, '../frontend/404.html'));
+        return;
+    }
+    if (req.accepts('json')) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+    }
+    res.type('txt').send('Not found');
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+    logger.info(`Smart Gallery System Server running on http://localhost:${PORT}`);
+    console.log(`Smart Gallery System running on http://localhost:${PORT}`);
+    console.log('Applications available:');
+    Object.keys(config.apps).forEach(appKey => {
+        console.log(`  - ${config.apps[appKey].name} (/app/${appKey})`);
+    });
+    console.log(`  - Monitoring Dashboard (/monitoring)`);
+    
+    try {
+        setupWatchers();
+        logger.info('File watchers initialized');
+        console.log('File watchers initialized');
+        
+        const users = auth.getAllUsers();
+        monitoring.updateUserMetrics(users);
+        logger.info('Monitoring system initialized');
+        console.log('Monitoring system initialized');
+        
+        logger.info('Server startup complete', {
+            port: PORT,
+            apps: Object.keys(config.apps).length,
+            users: users.length
+        });
+        
+        // Run Capabilities Check (Thesis Verification)
+        capabilitiesCheck.runCheck();
+        
+    } catch (error) {
+        console.error('Error during startup:', error);
+        logger.error('Startup error', error);
+    }
+});
+
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`\n❌ ERROR: Port ${PORT} is already in use!`);
+        console.error('Please stop the existing server or change the port in data/config.json\n');
+        logger.error('Port in use', { port: PORT, error: err });
+    } else {
+        console.error('\n❌ Server error:', err);
+        logger.error('Server error', err);
+    }
+    process.exit(1);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('\n❌ Uncaught Exception:', err);
+    logger.error('Uncaught exception', err);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('\n❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    logger.error('Unhandled rejection', { reason, promise });
+});
