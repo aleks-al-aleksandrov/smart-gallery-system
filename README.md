@@ -1,5 +1,9 @@
 # Smart Gallery System
 
+[![tests](https://github.com/aleks-al-aleksandrov/smart-gallery-system/actions/workflows/tests.yml/badge.svg)](https://github.com/aleks-al-aleksandrov/smart-gallery-system/actions/workflows/tests.yml)
+![Node.js](https://img.shields.io/badge/node-20%20%7C%2022-339933?logo=nodedotjs&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+
 > Every morning, team leaders in the warehouse printed the day's plans and KPIs, walked to the board and pinned them up. When something changed, they did it again.
 >
 > Now they save a file to a folder, and every screen on the floor shows it about two seconds later.
@@ -92,6 +96,8 @@ npm run start:env             # http://localhost:3000
 
 The admin account points at the demo content in `data/content/demo-images`, so the screens show something immediately. To try the real-time update, add or overwrite an image in `data/content/demo-images/daily-plan/<Shift>/` while the Daily Plan page is open.
 
+Run the tests (path allow-listing and configuration) with `npm test`.
+
 On Windows you can also use `scripts/windows/SETUP.bat` and `scripts/windows/START.bat`.
 
 ### Running on a Raspberry Pi
@@ -123,7 +129,7 @@ config.example.json    Default configuration (copied to data/config.json on firs
 
 ## What I would do next
 
-- Automated tests for the file-watcher → WebSocket flow
+- Extend the tests from configuration and path safety to the file-watcher → WebSocket flow
 - Move the remaining inline page scripts into modules and add a linter
 - A small health endpoint for each Pi so one admin page can see all screens
 - Replace the JSON user store with SQLite if the number of sites grows
