@@ -8,7 +8,8 @@
     "start:env": "node --env-file=.env backend/server.js",
     "init-admin": "node backend/init-admin.js",
     "init-test-data": "node backend/init-test-data.js",
-    "create-test-images": "node backend/utils/create-test-media-sharp.js"
+    "create-test-images": "node backend/utils/create-test-media-sharp.js",
+    "test": "node --test tests/*.test.js"
   },
   "keywords": [
     "nodejs",
